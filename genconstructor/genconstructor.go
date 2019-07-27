@@ -27,7 +27,7 @@ import (
 	"text/template"
 	"unicode"
 
-	"github.com/hori-ryota/go-genutil/genutil"
+	"github.com/GuiltyMorishita/go-genutil/genutil"
 	"github.com/hori-ryota/go-strcase"
 )
 
