@@ -34,6 +34,7 @@ import (
 const (
 	commentMarker = "//genconstructor"
 	pointerOpts   = "-p"
+	interfaceOpts = "-i"
 )
 
 type Option func(o *option)
@@ -84,12 +85,17 @@ func Run(targetDir string, newWriter func(pkg *ast.Package) io.Writer, opts ...O
 			}
 			hasMarker := false
 			hasPointerOpts := false
+			hasInterfaceOpts := false
 			for _, comment := range docs {
 				if strings.HasPrefix(strings.TrimSpace(comment.Text), commentMarker) {
 					hasMarker = true
 					for _, s := range strings.Fields(comment.Text) {
 						if s == pointerOpts {
 							hasPointerOpts = true
+							break
+						}
+						if s == interfaceOpts {
+							hasInterfaceOpts = true
 							break
 						}
 					}
@@ -153,16 +159,17 @@ func Run(targetDir string, newWriter func(pkg *ast.Package) io.Writer, opts ...O
 			}
 
 			if err := template.Must(template.New("constructor").Funcs(map[string]interface{}{
+				"ToUpperCamel": strcase.ToUpperCamel,
 				"ToLowerCamel": strcase.ToLowerCamel,
 			}).Parse(`
-func New{{ .StructName }}(
+func New{{ if .Interface }}{{ ToUpperCamel .StructName }}{{ else }}{{ .StructName }}{{ end }}(
 							{{- range .Fields }}
 								{{- if not .ConstValue }}
 									{{ ToLowerCamel .Name }} {{ .Type }},
 								{{- end }}
 							{{- end }}
-						) {{ if .Pointer }}*{{ end }}{{ .StructName }} {
-							return {{ if .Pointer }}&{{ end }}{{ .StructName }}{
+						) {{ if .Pointer }}*{{ end }}{{ if .Interface }}{{ ToUpperCamel .StructName }}{{ else }}{{ .StructName }}{{ end }} {
+							return {{ if .Pointer }}&{{ end }}{{ if .Interface }}&{{ end }}{{ .StructName }}{
 								{{- range .Fields }}
 									{{- if .ConstValue }}
 										{{ .Name }}: {{ .ConstValue }},
@@ -176,6 +183,7 @@ func New{{ .StructName }}(
 				StructName: spec.Name.Name,
 				Fields:     fieldInfos,
 				Pointer:    hasPointerOpts,
+				Interface:  hasInterfaceOpts,
 			}); err != nil {
 				return err
 			}
@@ -224,6 +232,7 @@ type tmplParam struct {
 	StructName string
 	Fields     []FieldInfo
 	Pointer    bool
+	Interface  bool
 }
 
 type FieldInfo struct {

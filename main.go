@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/hori-ryota/go-genconstructor/genconstructor"
+	"github.com/GuiltyMorishita/go-genconstructor/genconstructor"
 )
 
 func main() {
