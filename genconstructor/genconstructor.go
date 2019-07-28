@@ -34,7 +34,8 @@ import (
 const (
 	commentMarker = "//genconstructor"
 	pointerOpts   = "-p"
-	interfaceOpts = "-i"
+	superOpts     = "-s"
+	extendsOpts   = "-e"
 )
 
 type Option func(o *option)
@@ -85,7 +86,8 @@ func Run(targetDir string, newWriter func(pkg *ast.Package) io.Writer, opts ...O
 			}
 			hasMarker := false
 			hasPointerOpts := false
-			hasInterfaceOpts := false
+			hasSuperOpts := false
+			hasExtendsOpts := false
 			for _, comment := range docs {
 				if strings.HasPrefix(strings.TrimSpace(comment.Text), commentMarker) {
 					hasMarker = true
@@ -94,8 +96,12 @@ func Run(targetDir string, newWriter func(pkg *ast.Package) io.Writer, opts ...O
 							hasPointerOpts = true
 							break
 						}
-						if s == interfaceOpts {
-							hasInterfaceOpts = true
+						if s == superOpts {
+							hasSuperOpts = true
+							break
+						}
+						if s == extendsOpts {
+							hasExtendsOpts = true
 							break
 						}
 					}
@@ -108,6 +114,7 @@ func Run(targetDir string, newWriter func(pkg *ast.Package) io.Writer, opts ...O
 
 			structType := spec.Type.(*ast.StructType)
 
+			var superName string
 			fieldInfos := make([]FieldInfo, 0, len(structType.Fields.List))
 			for _, field := range structType.Fields.List {
 				if field.Tag == nil {
@@ -115,8 +122,10 @@ func Run(targetDir string, newWriter func(pkg *ast.Package) io.Writer, opts ...O
 				}
 				tag := reflect.StructTag(strings.Trim(field.Tag.Value, "`"))
 
-				constValue, hasTag := tag.Lookup("required")
-				if !hasTag {
+				constValue, hasRequiredTag := tag.Lookup("required")
+
+				_, hasSuperTag := tag.Lookup("super")
+				if !hasRequiredTag && !hasSuperTag {
 					continue
 				}
 
@@ -131,6 +140,10 @@ func Run(targetDir string, newWriter func(pkg *ast.Package) io.Writer, opts ...O
 					Name:       fieldName,
 					ConstValue: constValue,
 				})
+
+				if hasSuperTag {
+					superName = fieldName
+				}
 
 				// resolve imports
 				if constValue != "" {
@@ -158,32 +171,43 @@ func Run(targetDir string, newWriter func(pkg *ast.Package) io.Writer, opts ...O
 				}
 			}
 
+			var interfaceName string
+			if hasSuperOpts {
+				interfaceName = strcase.ToUpperCamel(spec.Name.Name)
+			}
+			if hasExtendsOpts {
+				matched := match(strcase.SplitIntoWords(strcase.ToUpperCamel(superName)), strcase.SplitIntoWords(strcase.ToUpperCamel(spec.Name.Name)))
+				interfaceName = strings.Join(matched, "")
+			}
+
 			if err := template.Must(template.New("constructor").Funcs(map[string]interface{}{
 				"ToUpperCamel": strcase.ToUpperCamel,
 				"ToLowerCamel": strcase.ToLowerCamel,
 			}).Parse(`
-func New{{ if .Interface }}{{ ToUpperCamel .StructName }}{{ else }}{{ .StructName }}{{ end }}(
+func New{{ ToUpperCamel .StructName }}(
 							{{- range .Fields }}
 								{{- if not .ConstValue }}
-									{{ ToLowerCamel .Name }} {{ .Type }},
+									{{ if and ($.Extends) (eq (ToUpperCamel .Name) $.InterfaceName) }}x {{ $.InterfaceName }}{{ else }}{{ ToLowerCamel .Name }} {{ .Type }}{{ end }},
 								{{- end }}
 							{{- end }}
-						) {{ if .Pointer }}*{{ end }}{{ if .Interface }}{{ ToUpperCamel .StructName }}{{ else }}{{ .StructName }}{{ end }} {
-							return {{ if .Pointer }}&{{ end }}{{ if .Interface }}&{{ end }}{{ .StructName }}{
+						) {{ if .Pointer }}*{{ end }}{{ if or (.Super) (.Extends) }}{{ .InterfaceName }}{{ else }}{{ .StructName }}{{ end }} {
+							return {{ if or (.Pointer) (.Super) (.Extends) }}&{{ end }}{{ .StructName }}{
 								{{- range .Fields }}
 									{{- if .ConstValue }}
 										{{ .Name }}: {{ .ConstValue }},
 									{{- else }}
-										{{ .Name }}: {{ ToLowerCamel .Name }},
+										{{ .Name }}: {{ if and ($.Extends) (eq (ToUpperCamel .Name) $.InterfaceName) }}x.(*{{ .Name }}){{ else }}{{ ToLowerCamel .Name }}{{ end }},
 									{{- end }}
 								{{- end }}
 							}
 						}
 					`)).Execute(body, tmplParam{
-				StructName: spec.Name.Name,
-				Fields:     fieldInfos,
-				Pointer:    hasPointerOpts,
-				Interface:  hasInterfaceOpts,
+				StructName:    spec.Name.Name,
+				InterfaceName: interfaceName,
+				Fields:        fieldInfos,
+				Pointer:       hasPointerOpts,
+				Super:         hasSuperOpts,
+				Extends:       hasExtendsOpts,
 			}); err != nil {
 				return err
 			}
@@ -229,14 +253,30 @@ func New{{ if .Interface }}{{ ToUpperCamel .StructName }}{{ else }}{{ .StructNam
 }
 
 type tmplParam struct {
-	StructName string
-	Fields     []FieldInfo
-	Pointer    bool
-	Interface  bool
+	StructName    string
+	InterfaceName string
+	Fields        []FieldInfo
+	Pointer       bool
+	Super         bool
+	Extends       bool
 }
 
 type FieldInfo struct {
 	Type       string
 	Name       string
 	ConstValue string
+}
+
+func match(a, b []string) []string {
+	mb := make(map[string]struct{}, len(b))
+	for _, x := range b {
+		mb[x] = struct{}{}
+	}
+	var match []string
+	for _, x := range a {
+		if _, found := mb[x]; found {
+			match = append(match, x)
+		}
+	}
+	return match
 }
